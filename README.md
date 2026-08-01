@@ -84,7 +84,7 @@ Verifying records directly from PostgreSQL.
 
 ---
 
-# Application Load Balancer
+#  Application Load Balancer
 
 The Application Load Balancer distributes incoming traffic to the ECS services.
 
