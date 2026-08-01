@@ -214,6 +214,28 @@ Resources:
             - HEAD
           ForwardedValues:
             QueryString: false
+        CacheBehaviors:
+          - PathPattern: /api/*
+            TargetOriginId: ALBOrigin
+            ViewerProtocolPolicy: allow-all
+            AllowedMethods:
+              - DELETE
+              - GET
+              - HEAD
+              - OPTIONS
+              - PATCH
+              - POST
+              - PUT
+            CachedMethods:
+              - GET
+              - HEAD
+            MinTTL: 0
+            DefaultTTL: 0
+            MaxTTL: 0
+            ForwardedValues:
+              QueryString: true
+              Cookies:
+                Forward: none
 
 Outputs:
   ALBDNSName:
