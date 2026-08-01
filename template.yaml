@@ -24,8 +24,18 @@ Resources:
       ExecutionRoleArn: arn:aws:iam::279391565053:role/ecsTaskExecutionRole
 
       ContainerDefinitions:
-        - Name: AppName
-          Image: amazon/amazon-ecs-sample
+        - Name: aws-app-backend
+          Image: 279391565053.dkr.ecr.ap-south-1.amazonaws.com/aws-app-backend
+
+          Essential: true
+
+          PortMappings:
+            - ContainerPort: 5000
+
+          Cpu: 256
+          Memory: 512
+        - Name: aws-app-frontend
+          Image: 279391565053.dkr.ecr.ap-south-1.amazonaws.com/aws-app-frontend
 
           Essential: true
 
