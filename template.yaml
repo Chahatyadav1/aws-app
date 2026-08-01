@@ -1,4 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
+Description: "3-tier app on ECS Fargate + RDS (fixed - RDS networking, matching engine, backend env vars, /api/* routing)"
 
 Resources:
 
@@ -7,180 +8,217 @@ Resources:
     Properties:
       ClusterName: MyCluster
 
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /ecs/my-app
+      RetentionInDays: 14
+
+  RDSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow Postgres only from the ECS task security group
+      VpcId: vpc-08199716c73348a30
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          SourceSecurityGroupId: sg-0c85e00ff3d8848d0
+
+  DBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Subnets for RDS (reusing your existing subnets - see note below)
+      SubnetIds:
+        - subnet-0c637e550d298242c
+        - subnet-0e4c85ddd5602329b
+
+  RDSDBInstance:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Snapshot
+    UpdateReplacePolicy: Snapshot
+    Properties:
+      AllocatedStorage: "20"
+      DBInstanceClass: db.t3.micro
+      Engine: postgres          
+      DBName: appdb
+      MasterUsername: postgres
+      MasterUserPassword: admin12345
+      StorageType: gp2
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      VPCSecurityGroups:
+        - !GetAtt RDSSecurityGroup.GroupId
+      PubliclyAccessible: false  
 
   TaskDefinition:
     Type: AWS::ECS::TaskDefinition
     Properties:
       Family: my-app
-
       RequiresCompatibilities:
         - FARGATE
-
       NetworkMode: awsvpc
-
       Cpu: "512"
       Memory: "1024"
-
       ExecutionRoleArn: arn:aws:iam::279391565053:role/ecsTaskExecutionRole
-
       ContainerDefinitions:
         - Name: aws-app-backend
           Image: 279391565053.dkr.ecr.ap-south-1.amazonaws.com/aws-app-backend
-
           Essential: true
-
           PortMappings:
             - ContainerPort: 5000
-
           Cpu: 256
           Memory: 512
+          Environment:
+            - Name: DB_HOST
+              Value: !GetAtt RDSDBInstance.Endpoint.Address
+            - Name: DB_PORT
+              Value: !GetAtt RDSDBInstance.Endpoint.Port
+            - Name: DB_NAME
+              Value: appdb
+            - Name: DB_USER
+              Value: postgres
+            - Name: DB_PASSWORD
+              Value: admin12345
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: /ecs/my-app
+              awslogs-region: ap-south-1
+              awslogs-stream-prefix: backend
         - Name: aws-app-frontend
           Image: 279391565053.dkr.ecr.ap-south-1.amazonaws.com/aws-app-frontend
-
           Essential: true
-
           PortMappings:
             - ContainerPort: 80
-
           Cpu: 256
           Memory: 512
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: /ecs/my-app
+              awslogs-region: ap-south-1
+              awslogs-stream-prefix: frontend
 
-
-  MyTargetGroup:
+  FrontendTargetGroup:
     Type: AWS::ElasticLoadBalancingV2::TargetGroup
     Properties:
-      Name: my-target-group
-
+      Name: frontend-target-group
       Protocol: HTTP
       Port: 80
-
       TargetType: ip
-
       VpcId: vpc-08199716c73348a30
-
       HealthCheckEnabled: true
       HealthCheckPath: /
       HealthCheckProtocol: HTTP
+      HealthCheckIntervalSeconds: 30
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+
+  BackendTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: backend-target-group
+      Protocol: HTTP
+      Port: 5000
+      TargetType: ip
+      VpcId: vpc-08199716c73348a30
+      HealthCheckEnabled: true
+      HealthCheckPath: /api/health   # matches the Flask route - "/" would 404 here
+      HealthCheckProtocol: HTTP
+      HealthCheckIntervalSeconds: 30
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
 
   MyLoadBalancer:
     Type: AWS::ElasticLoadBalancingV2::LoadBalancer
     Properties:
       Name: my-alb
-
       Type: application
-
       Scheme: internet-facing
-
       Subnets:
         - subnet-0c637e550d298242c
         - subnet-0e4c85ddd5602329b
-
       SecurityGroups:
         - sg-0c85e00ff3d8848d0
-
-
 
   HTTPListener:
     Type: AWS::ElasticLoadBalancingV2::Listener
     Properties:
-
       LoadBalancerArn: !Ref MyLoadBalancer
-
       Port: 80
-
       Protocol: HTTP
-
       DefaultActions:
         - Type: forward
-          TargetGroupArn: !Ref MyTargetGroup
+          TargetGroupArn: !Ref FrontendTargetGroup
+
+  ApiListenerRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      ListenerArn: !Ref HTTPListener
+      Priority: 1
+      Conditions:
+        - Field: path-pattern
+          Values:
+            - /api/*
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref BackendTargetGroup
 
   ECSService:
     Type: AWS::ECS::Service
-    DependsOn: HTTPListener
-
+    DependsOn:
+      - HTTPListener
+      - ApiListenerRule
     Properties:
-
       Cluster: !Ref ECSCluster
-
       LaunchType: FARGATE
-
       DesiredCount: 2
-
       TaskDefinition: !Ref TaskDefinition
-
+      HealthCheckGracePeriodSeconds: 60
       NetworkConfiguration:
-
         AwsvpcConfiguration:
-
           AssignPublicIp: ENABLED
-
           Subnets:
             - subnet-0c637e550d298242c
             - subnet-0e4c85ddd5602329b
-
           SecurityGroups:
             - sg-0c85e00ff3d8848d0
-
       LoadBalancers:
-        - TargetGroupArn: !Ref MyTargetGroup
-          ContainerName: AppName
+        - TargetGroupArn: !Ref FrontendTargetGroup
+          ContainerName: aws-app-frontend
           ContainerPort: 80
-
+        - TargetGroupArn: !Ref BackendTargetGroup
+          ContainerName: aws-app-backend
+          ContainerPort: 5000
 
   MyDistribution:
     Type: AWS::CloudFront::Distribution
-
     Properties:
-
       DistributionConfig:
-
         Enabled: true
-
         Origins:
-
           - Id: ALBOrigin
-
             DomainName: !GetAtt MyLoadBalancer.DNSName
-
             CustomOriginConfig:
-
               HTTPPort: 80
-
               HTTPSPort: 443
-
               OriginProtocolPolicy: http-only
-
         DefaultCacheBehavior:
-
           TargetOriginId: ALBOrigin
-
           ViewerProtocolPolicy: allow-all
-
           AllowedMethods:
             - GET
             - HEAD
-
           CachedMethods:
             - GET
             - HEAD
-
           ForwardedValues:
             QueryString: false
 
-
-  RDSDBInstance:
-    Type: AWS::RDS::DBInstance
-
-    Properties:
-
-      AllocatedStorage: "20"
-
-      DBInstanceClass: db.t3.micro
-
-      Engine: mysql
-
-      MasterUsername: admin
-
-      MasterUserPassword: admin12345
-
-      StorageType: gp2
+Outputs:
+  ALBDNSName:
+    Value: !GetAtt MyLoadBalancer.DNSName
+  CloudFrontDomain:
+    Value: !GetAtt MyDistribution.DomainName
+  RDSEndpoint:
+    Value: !GetAtt RDSDBInstance.Endpoint.Address
