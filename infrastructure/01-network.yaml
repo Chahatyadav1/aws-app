@@ -1,0 +1,338 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Tier 0 - Networking for the 3-tier ECS Fargate application.
+  Creates a VPC across 2 AZs with public subnets (ALB), private app
+  subnets (ECS Fargate tasks), and private data subnets (RDS).
+
+Parameters:
+  EnvironmentName:
+    Type: String
+    Default: threetier-app
+  VpcCIDR:
+    Type: String
+    Default: 10.20.0.0/16
+  PublicSubnet1CIDR:
+    Type: String
+    Default: 10.20.0.0/24
+  PublicSubnet2CIDR:
+    Type: String
+    Default: 10.20.1.0/24
+  PrivateAppSubnet1CIDR:
+    Type: String
+    Default: 10.20.10.0/24
+  PrivateAppSubnet2CIDR:
+    Type: String
+    Default: 10.20.11.0/24
+  PrivateDataSubnet1CIDR:
+    Type: String
+    Default: 10.20.20.0/24
+  PrivateDataSubnet2CIDR:
+    Type: String
+    Default: 10.20.21.0/24
+  BackendContainerPort:
+    Type: Number
+    Default: 5000
+
+Resources:
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCIDR
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-vpc
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-igw
+
+  IGWAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+  # ---------------- Public subnets (Presentation edge / ALB) ----------------
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref PublicSubnet1CIDR
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-public-1
+
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref PublicSubnet2CIDR
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-public-2
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-public-rt
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: IGWAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnet1RTAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet1
+      RouteTableId: !Ref PublicRouteTable
+
+  PublicSubnet2RTAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet2
+      RouteTableId: !Ref PublicRouteTable
+
+  # ---------------- NAT Gateways (one per AZ for HA) ----------------
+  NatGateway1EIP:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+
+  NatGateway2EIP:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+
+  NatGateway1:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatGateway1EIP.AllocationId
+      SubnetId: !Ref PublicSubnet1
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-nat-1
+
+  NatGateway2:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatGateway2EIP.AllocationId
+      SubnetId: !Ref PublicSubnet2
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-nat-2
+
+  # ---------------- Private app subnets (ECS Fargate: frontend & backend) ----------------
+  PrivateAppSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref PrivateAppSubnet1CIDR
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-private-app-1
+
+  PrivateAppSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref PrivateAppSubnet2CIDR
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-private-app-2
+
+  PrivateAppRouteTable1:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-private-app-rt-1
+
+  PrivateAppRoute1:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateAppRouteTable1
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway1
+
+  PrivateAppSubnet1RTAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateAppSubnet1
+      RouteTableId: !Ref PrivateAppRouteTable1
+
+  PrivateAppRouteTable2:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-private-app-rt-2
+
+  PrivateAppRoute2:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateAppRouteTable2
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway2
+
+  PrivateAppSubnet2RTAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateAppSubnet2
+      RouteTableId: !Ref PrivateAppRouteTable2
+
+  # ---------------- Private data subnets (RDS) ----------------
+  PrivateDataSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref PrivateDataSubnet1CIDR
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-private-data-1
+
+  PrivateDataSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref PrivateDataSubnet2CIDR
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-private-data-2
+
+  PrivateDataRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-private-data-rt
+
+  PrivateDataSubnet1RTAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateDataSubnet1
+      RouteTableId: !Ref PrivateDataRouteTable
+
+  PrivateDataSubnet2RTAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateDataSubnet2
+      RouteTableId: !Ref PrivateDataRouteTable
+
+  # ---------------- Security Groups ----------------
+  ALBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow inbound HTTP/HTTPS from the internet to the ALB
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-alb-sg
+
+  FrontendServiceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow inbound traffic from the ALB to the frontend Fargate tasks
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          SourceSecurityGroupId: !Ref ALBSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-frontend-sg
+
+  BackendServiceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow inbound traffic from the ALB to the backend Fargate tasks
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: !Ref BackendContainerPort
+          ToPort: !Ref BackendContainerPort
+          SourceSecurityGroupId: !Ref ALBSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-backend-sg
+
+  DatabaseSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow inbound Postgres traffic from the backend Fargate tasks only
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          SourceSecurityGroupId: !Ref BackendServiceSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-rds-sg
+
+Outputs:
+  VpcId:
+    Value: !Ref VPC
+    Export: { Name: !Sub "${EnvironmentName}-VpcId" }
+  PublicSubnet1Id:
+    Value: !Ref PublicSubnet1
+    Export: { Name: !Sub "${EnvironmentName}-PublicSubnet1Id" }
+  PublicSubnet2Id:
+    Value: !Ref PublicSubnet2
+    Export: { Name: !Sub "${EnvironmentName}-PublicSubnet2Id" }
+  PrivateAppSubnet1Id:
+    Value: !Ref PrivateAppSubnet1
+    Export: { Name: !Sub "${EnvironmentName}-PrivateAppSubnet1Id" }
+  PrivateAppSubnet2Id:
+    Value: !Ref PrivateAppSubnet2
+    Export: { Name: !Sub "${EnvironmentName}-PrivateAppSubnet2Id" }
+  PrivateDataSubnet1Id:
+    Value: !Ref PrivateDataSubnet1
+    Export: { Name: !Sub "${EnvironmentName}-PrivateDataSubnet1Id" }
+  PrivateDataSubnet2Id:
+    Value: !Ref PrivateDataSubnet2
+    Export: { Name: !Sub "${EnvironmentName}-PrivateDataSubnet2Id" }
+  ALBSecurityGroupId:
+    Value: !Ref ALBSecurityGroup
+    Export: { Name: !Sub "${EnvironmentName}-ALBSecurityGroupId" }
+  FrontendServiceSecurityGroupId:
+    Value: !Ref FrontendServiceSecurityGroup
+    Export: { Name: !Sub "${EnvironmentName}-FrontendServiceSecurityGroupId" }
+  BackendServiceSecurityGroupId:
+    Value: !Ref BackendServiceSecurityGroup
+    Export: { Name: !Sub "${EnvironmentName}-BackendServiceSecurityGroupId" }
+  DatabaseSecurityGroupId:
+    Value: !Ref DatabaseSecurityGroup
+    Export: { Name: !Sub "${EnvironmentName}-DatabaseSecurityGroupId" }

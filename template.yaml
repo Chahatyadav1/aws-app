@@ -1,0 +1,176 @@
+AWSTemplateFormatVersion: '2010-09-09'
+
+Resources:
+
+  ECSCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: MyCluster
+
+
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: my-app
+
+      RequiresCompatibilities:
+        - FARGATE
+
+      NetworkMode: awsvpc
+
+      Cpu: "512"
+      Memory: "1024"
+
+      ExecutionRoleArn: arn:aws:iam::279391565053:role/ecsTaskExecutionRole
+
+      ContainerDefinitions:
+        - Name: AppName
+          Image: amazon/amazon-ecs-sample
+
+          Essential: true
+
+          PortMappings:
+            - ContainerPort: 80
+
+          Cpu: 256
+          Memory: 512
+
+
+  MyTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: my-target-group
+
+      Protocol: HTTP
+      Port: 80
+
+      TargetType: ip
+
+      VpcId: vpc-08199716c73348a30
+
+      HealthCheckEnabled: true
+      HealthCheckPath: /
+      HealthCheckProtocol: HTTP
+
+  MyLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: my-alb
+
+      Type: application
+
+      Scheme: internet-facing
+
+      Subnets:
+        - subnet-0c637e550d298242c
+        - subnet-0e4c85ddd5602329b
+
+      SecurityGroups:
+        - sg-0c85e00ff3d8848d0
+
+
+
+  HTTPListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+
+      LoadBalancerArn: !Ref MyLoadBalancer
+
+      Port: 80
+
+      Protocol: HTTP
+
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref MyTargetGroup
+
+  ECSService:
+    Type: AWS::ECS::Service
+    DependsOn: HTTPListener
+
+    Properties:
+
+      Cluster: !Ref ECSCluster
+
+      LaunchType: FARGATE
+
+      DesiredCount: 2
+
+      TaskDefinition: !Ref TaskDefinition
+
+      NetworkConfiguration:
+
+        AwsvpcConfiguration:
+
+          AssignPublicIp: ENABLED
+
+          Subnets:
+            - subnet-0c637e550d298242c
+            - subnet-0e4c85ddd5602329b
+
+          SecurityGroups:
+            - sg-0c85e00ff3d8848d0
+
+      LoadBalancers:
+        - TargetGroupArn: !Ref MyTargetGroup
+          ContainerName: AppName
+          ContainerPort: 80
+
+
+  MyDistribution:
+    Type: AWS::CloudFront::Distribution
+
+    Properties:
+
+      DistributionConfig:
+
+        Enabled: true
+
+        Origins:
+
+          - Id: ALBOrigin
+
+            DomainName: !GetAtt MyLoadBalancer.DNSName
+
+            CustomOriginConfig:
+
+              HTTPPort: 80
+
+              HTTPSPort: 443
+
+              OriginProtocolPolicy: http-only
+
+        DefaultCacheBehavior:
+
+          TargetOriginId: ALBOrigin
+
+          ViewerProtocolPolicy: allow-all
+
+          AllowedMethods:
+            - GET
+            - HEAD
+
+          CachedMethods:
+            - GET
+            - HEAD
+
+          ForwardedValues:
+            QueryString: false
+
+
+  RDSDBInstance:
+    Type: AWS::RDS::DBInstance
+
+    Properties:
+
+      AllocatedStorage: "8"
+
+      DBInstanceClass: db.t3.micro
+
+      Engine: mysql
+
+      MasterUsername: admin
+
+      MasterUserPassword: admin12345
+
+      StorageType: gp3

@@ -1,0 +1,95 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Tier 1 - Data tier. RDS PostgreSQL instance in the private data subnets,
+  with credentials managed and rotated via Secrets Manager.
+
+Parameters:
+  EnvironmentName:
+    Type: String
+    Default: threetier-app
+  DBName:
+    Type: String
+    Default: appdb
+  DBInstanceClass:
+    Type: String
+    Default: db.t3.micro
+  DBAllocatedStorage:
+    Type: Number
+    Default: 20
+  MultiAZ:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+  EngineVersion:
+    Type: String
+    Default: "16.4"
+
+Resources:
+  DBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Private data subnets for RDS
+      SubnetIds:
+        - Fn::ImportValue: !Sub "${EnvironmentName}-PrivateDataSubnet1Id"
+        - Fn::ImportValue: !Sub "${EnvironmentName}-PrivateDataSubnet2Id"
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-db-subnet-group
+
+  DBCredentialsSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub ${EnvironmentName}/rds/credentials
+      Description: Master credentials for the RDS PostgreSQL instance
+      GenerateSecretString:
+        SecretStringTemplate: '{"username": "appadmin"}'
+        GenerateStringKey: password
+        PasswordLength: 24
+        ExcludeCharacters: '"@/\'
+
+  DBInstance:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Snapshot
+    UpdateReplacePolicy: Snapshot
+    Properties:
+      DBInstanceIdentifier: !Sub ${EnvironmentName}-db
+      Engine: postgres
+      EngineVersion: !Ref EngineVersion
+      DBInstanceClass: !Ref DBInstanceClass
+      AllocatedStorage: !Ref DBAllocatedStorage
+      StorageType: gp3
+      DBName: !Ref DBName
+      MasterUsername: !Sub "{{resolve:secretsmanager:${DBCredentialsSecret}:SecretString:username}}"
+      MasterUserPassword: !Sub "{{resolve:secretsmanager:${DBCredentialsSecret}:SecretString:password}}"
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      VPCSecurityGroups:
+        - Fn::ImportValue: !Sub "${EnvironmentName}-DatabaseSecurityGroupId"
+      MultiAZ: !Ref MultiAZ
+      PubliclyAccessible: false
+      StorageEncrypted: true
+      BackupRetentionPeriod: 7
+      DeletionProtection: false
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-db
+
+  SecretTargetAttachment:
+    Type: AWS::SecretsManager::SecretTargetAttachment
+    Properties:
+      SecretId: !Ref DBCredentialsSecret
+      TargetId: !Ref DBInstance
+      TargetType: AWS::RDS::DBInstance
+
+Outputs:
+  DBEndpointAddress:
+    Value: !GetAtt DBInstance.Endpoint.Address
+    Export: { Name: !Sub "${EnvironmentName}-DBEndpointAddress" }
+  DBEndpointPort:
+    Value: !GetAtt DBInstance.Endpoint.Port
+    Export: { Name: !Sub "${EnvironmentName}-DBEndpointPort" }
+  DBName:
+    Value: !Ref DBName
+    Export: { Name: !Sub "${EnvironmentName}-DBName" }
+  DBSecretArn:
+    Value: !Ref DBCredentialsSecret
+    Export: { Name: !Sub "${EnvironmentName}-DBSecretArn" }

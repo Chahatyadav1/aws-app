@@ -1,0 +1,210 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Tier 2 (compute) - ECS Fargate task definitions and services for the
+  frontend (React/nginx) and backend (Flask) tiers.
+
+Parameters:
+  EnvironmentName:
+    Type: String
+    Default: threetier-app
+  ImageTag:
+    Type: String
+    Default: latest
+    Description: Tag of the image already present in ECR. The pipeline updates this after the first deploy.
+  BackendContainerPort:
+    Type: Number
+    Default: 5000
+  FrontendDesiredCount:
+    Type: Number
+    Default: 2
+  BackendDesiredCount:
+    Type: Number
+    Default: 2
+  FrontendCpu:
+    Type: String
+    Default: "256"
+  FrontendMemory:
+    Type: String
+    Default: "512"
+  BackendCpu:
+    Type: String
+    Default: "256"
+  BackendMemory:
+    Type: String
+    Default: "512"
+
+Resources:
+  FrontendLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /ecs/${EnvironmentName}/frontend
+      RetentionInDays: 14
+
+  BackendLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /ecs/${EnvironmentName}/backend
+      RetentionInDays: 14
+
+  TaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${EnvironmentName}-task-execution-role
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ecs-tasks.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      Policies:
+        - PolicyName: ReadDBSecret
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource:
+                  Fn::ImportValue: !Sub "${EnvironmentName}-DBSecretArn"
+
+  BackendTaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${EnvironmentName}-backend-task-role
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ecs-tasks.amazonaws.com }
+            Action: sts:AssumeRole
+
+  FrontendTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub ${EnvironmentName}-frontend
+      RequiresCompatibilities: [FARGATE]
+      NetworkMode: awsvpc
+      Cpu: !Ref FrontendCpu
+      Memory: !Ref FrontendMemory
+      ExecutionRoleArn: !GetAtt TaskExecutionRole.Arn
+      ContainerDefinitions:
+        - Name: frontend
+          Image: !Sub
+            - "${RepoUri}:${ImageTag}"
+            - RepoUri:
+                Fn::ImportValue: !Sub "${EnvironmentName}-FrontendRepositoryUri"
+          PortMappings:
+            - ContainerPort: 80
+              Protocol: tcp
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref FrontendLogGroup
+              awslogs-region: !Ref "AWS::Region"
+              awslogs-stream-prefix: frontend
+
+  BackendTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub ${EnvironmentName}-backend
+      RequiresCompatibilities: [FARGATE]
+      NetworkMode: awsvpc
+      Cpu: !Ref BackendCpu
+      Memory: !Ref BackendMemory
+      ExecutionRoleArn: !GetAtt TaskExecutionRole.Arn
+      TaskRoleArn: !GetAtt BackendTaskRole.Arn
+      ContainerDefinitions:
+        - Name: backend
+          Image: !Sub
+            - "${RepoUri}:${ImageTag}"
+            - RepoUri:
+                Fn::ImportValue: !Sub "${EnvironmentName}-BackendRepositoryUri"
+          PortMappings:
+            - ContainerPort: !Ref BackendContainerPort
+              Protocol: tcp
+          Environment:
+            - Name: DB_HOST
+              Value:
+                Fn::ImportValue: !Sub "${EnvironmentName}-DBEndpointAddress"
+            - Name: DB_PORT
+              Value:
+                Fn::ImportValue: !Sub "${EnvironmentName}-DBEndpointPort"
+            - Name: DB_NAME
+              Value:
+                Fn::ImportValue: !Sub "${EnvironmentName}-DBName"
+          Secrets:
+            - Name: DB_USER
+              ValueFrom:
+                Fn::Sub:
+                  - "${SecretArn}:username::"
+                  - SecretArn: { Fn::ImportValue: !Sub "${EnvironmentName}-DBSecretArn" }
+            - Name: DB_PASSWORD
+              ValueFrom:
+                Fn::Sub:
+                  - "${SecretArn}:password::"
+                  - SecretArn: { Fn::ImportValue: !Sub "${EnvironmentName}-DBSecretArn" }
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref BackendLogGroup
+              awslogs-region: !Ref "AWS::Region"
+              awslogs-stream-prefix: backend
+
+  FrontendService:
+    Type: AWS::ECS::Service
+    Properties:
+      ServiceName: !Sub ${EnvironmentName}-frontend-svc
+      Cluster:
+        Fn::ImportValue: !Sub "${EnvironmentName}-ClusterName"
+      TaskDefinition: !Ref FrontendTaskDefinition
+      DesiredCount: !Ref FrontendDesiredCount
+      LaunchType: FARGATE
+      DeploymentController:
+        Type: ECS
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: DISABLED
+          Subnets:
+            - Fn::ImportValue: !Sub "${EnvironmentName}-PrivateAppSubnet1Id"
+            - Fn::ImportValue: !Sub "${EnvironmentName}-PrivateAppSubnet2Id"
+          SecurityGroups:
+            - Fn::ImportValue: !Sub "${EnvironmentName}-FrontendServiceSecurityGroupId"
+      LoadBalancers:
+        - ContainerName: frontend
+          ContainerPort: 80
+          TargetGroupArn:
+            Fn::ImportValue: !Sub "${EnvironmentName}-FrontendTargetGroupArn"
+
+  BackendService:
+    Type: AWS::ECS::Service
+    Properties:
+      ServiceName: !Sub ${EnvironmentName}-backend-svc
+      Cluster:
+        Fn::ImportValue: !Sub "${EnvironmentName}-ClusterName"
+      TaskDefinition: !Ref BackendTaskDefinition
+      DesiredCount: !Ref BackendDesiredCount
+      LaunchType: FARGATE
+      DeploymentController:
+        Type: ECS
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: DISABLED
+          Subnets:
+            - Fn::ImportValue: !Sub "${EnvironmentName}-PrivateAppSubnet1Id"
+            - Fn::ImportValue: !Sub "${EnvironmentName}-PrivateAppSubnet2Id"
+          SecurityGroups:
+            - Fn::ImportValue: !Sub "${EnvironmentName}-BackendServiceSecurityGroupId"
+      LoadBalancers:
+        - ContainerName: backend
+          ContainerPort: !Ref BackendContainerPort
+          TargetGroupArn:
+            Fn::ImportValue: !Sub "${EnvironmentName}-BackendTargetGroupArn"
+
+Outputs:
+  FrontendServiceName:
+    Value: !GetAtt FrontendService.Name
+    Export: { Name: !Sub "${EnvironmentName}-FrontendServiceName" }
+  BackendServiceName:
+    Value: !GetAtt BackendService.Name
+    Export: { Name: !Sub "${EnvironmentName}-BackendServiceName" }

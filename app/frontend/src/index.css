@@ -1,0 +1,60 @@
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  background: #0f172a;
+  color: #e2e8f0;
+}
+.container {
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 40px 20px;
+}
+h1 { font-size: 1.75rem; margin-bottom: 4px; }
+.subtitle { color: #94a3b8; margin-bottom: 24px; font-size: 0.9rem; }
+.card {
+  background: #1e293b;
+  border-radius: 10px;
+  padding: 20px;
+  margin-bottom: 20px;
+}
+form { display: flex; gap: 8px; }
+input[type="text"] {
+  flex: 1;
+  padding: 10px 12px;
+  border-radius: 6px;
+  border: 1px solid #334155;
+  background: #0f172a;
+  color: #e2e8f0;
+}
+button {
+  padding: 10px 16px;
+  border-radius: 6px;
+  border: none;
+  background: #6366f1;
+  color: white;
+  cursor: pointer;
+  font-weight: 600;
+}
+button:hover { background: #4f46e5; }
+ul { list-style: none; padding: 0; margin: 0; }
+li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 0;
+  border-bottom: 1px solid #334155;
+}
+li:last-child { border-bottom: none; }
+.task-title.done { text-decoration: line-through; color: #64748b; }
+.status-badge {
+  display: inline-block;
+  font-size: 0.75rem;
+  padding: 2px 8px;
+  border-radius: 999px;
+  margin-left: 8px;
+}
+.status-ok { background: #064e3b; color: #6ee7b7; }
+.status-fail { background: #450a0a; color: #fca5a5; }
+.delete-btn { background: transparent; color: #f87171; font-weight: normal; }
+.delete-btn:hover { background: #331111; }
