@@ -28,7 +28,7 @@ Resources:
   DBSubnetGroup:
     Type: AWS::RDS::DBSubnetGroup
     Properties:
-      DBSubnetGroupDescription: Subnets for RDS (reusing your existing subnets - see note below)
+      DBSubnetGroupDescription: Subnets for RDS 
       SubnetIds:
         - subnet-0c637e550d298242c
         - subnet-0e4c85ddd5602329b
@@ -123,7 +123,7 @@ Resources:
       TargetType: ip
       VpcId: vpc-08199716c73348a30
       HealthCheckEnabled: true
-      HealthCheckPath: /api/health   # matches the Flask route - "/" would 404 here
+      HealthCheckPath: /api/health   
       HealthCheckProtocol: HTTP
       HealthCheckIntervalSeconds: 30
       HealthyThresholdCount: 2
