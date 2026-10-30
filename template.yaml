@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: "3-tier app on ECS Fargate + RDS (fixed - RDS networking, matching engine, backend env vars, /api/* routing)"
+Description: "3-tier app on ECS Fargate + RDS + ElastiCache Redis (RDS networking, matching engine, backend env vars, /api/* routing)"
 
 Resources:
 
@@ -50,6 +50,42 @@ Resources:
         - !GetAtt RDSSecurityGroup.GroupId
       PubliclyAccessible: false  
 
+  # ---------------- Redis (ElastiCache) ----------------
+
+  RedisSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow Redis only from the ECS task security group
+      VpcId: vpc-08199716c73348a30
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 6379
+          ToPort: 6379
+          SourceSecurityGroupId: sg-0c85e00ff3d8848d0
+
+  RedisSubnetGroup:
+    Type: AWS::ElastiCache::SubnetGroup
+    Properties:
+      Description: Subnets for ElastiCache Redis
+      SubnetIds:
+        - subnet-0c637e550d298242c
+        - subnet-0e4c85ddd5602329b
+
+  RedisCluster:
+    Type: AWS::ElastiCache::CacheCluster
+    Properties:
+      ClusterName: my-app-redis
+      Engine: redis
+      EngineVersion: "7.1"
+      CacheNodeType: cache.t3.micro
+      NumCacheNodes: 1
+      Port: 6379
+      CacheSubnetGroupName: !Ref RedisSubnetGroup
+      VpcSecurityGroupIds:
+        - !GetAtt RedisSecurityGroup.GroupId
+
+  # ---------------- ECS ----------------
+
   TaskDefinition:
     Type: AWS::ECS::TaskDefinition
     Properties:
@@ -79,6 +115,12 @@ Resources:
               Value: postgres
             - Name: DB_PASSWORD
               Value: admin12345
+            - Name: REDIS_HOST
+              Value: !GetAtt RedisCluster.RedisEndpoint.Address
+            - Name: REDIS_PORT
+              Value: !GetAtt RedisCluster.RedisEndpoint.Port
+            - Name: REDIS_URL
+              Value: !Sub "redis://${RedisCluster.RedisEndpoint.Address}:${RedisCluster.RedisEndpoint.Port}/0"
           LogConfiguration:
             LogDriver: awslogs
             Options:
@@ -169,6 +211,7 @@ Resources:
     DependsOn:
       - HTTPListener
       - ApiListenerRule
+      - RedisCluster
     Properties:
       Cluster: !Ref ECSCluster
       LaunchType: FARGATE
@@ -244,3 +287,5 @@ Outputs:
     Value: !GetAtt MyDistribution.DomainName
   RDSEndpoint:
     Value: !GetAtt RDSDBInstance.Endpoint.Address
+  RedisEndpoint:
+    Value: !GetAtt RedisCluster.RedisEndpoint.Address
