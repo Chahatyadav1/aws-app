@@ -1,8 +1,11 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: "3-tier app on ECS Fargate + RDS + ElastiCache Redis (RDS networking, matching engine, backend env vars, /api/* routing)"
 
+Parameters:
+  CloudFrontPrefixListId:
+    Type: String
+    
 Resources:
-
   ECSCluster:
     Type: AWS::ECS::Cluster
     Properties:
@@ -14,6 +17,35 @@ Resources:
       LogGroupName: /ecs/my-app
       RetentionInDays: 14
 
+  ALBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: ALB - inbound HTTP only from CloudFront origin-facing IPs
+      VpcId: vpc-08199716c73348a30
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          SourcePrefixListId: !Ref CloudFrontPrefixListId
+          Description: CloudFront origin-facing prefix list
+
+  ECSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: ECS tasks - inbound only from the ALB security group
+      VpcId: vpc-08199716c73348a30
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          SourceSecurityGroupId: !Ref ALBSecurityGroup
+          Description: Frontend from ALB
+        - IpProtocol: tcp
+          FromPort: 5000
+          ToPort: 5000
+          SourceSecurityGroupId: !Ref ALBSecurityGroup
+          Description: Backend from ALB
+
   RDSSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
@@ -23,7 +55,7 @@ Resources:
         - IpProtocol: tcp
           FromPort: 5432
           ToPort: 5432
-          SourceSecurityGroupId: sg-0c85e00ff3d8848d0
+          SourceSecurityGroupId: !Ref ECSSecurityGroup
 
   DBSubnetGroup:
     Type: AWS::RDS::DBSubnetGroup
@@ -59,7 +91,7 @@ Resources:
         - IpProtocol: tcp
           FromPort: 6379
           ToPort: 6379
-          SourceSecurityGroupId: sg-0c85e00ff3d8848d0
+          SourceSecurityGroupId: !Ref ECSSecurityGroup
 
   RedisSubnetGroup:
     Type: AWS::ElastiCache::SubnetGroup
@@ -177,7 +209,7 @@ Resources:
         - subnet-0c637e550d298242c
         - subnet-0e4c85ddd5602329b
       SecurityGroups:
-        - sg-0c85e00ff3d8848d0
+        - !Ref ALBSecurityGroup
 
   HTTPListener:
     Type: AWS::ElasticLoadBalancingV2::Listener
@@ -221,7 +253,7 @@ Resources:
             - subnet-0c637e550d298242c
             - subnet-0e4c85ddd5602329b
           SecurityGroups:
-            - sg-0c85e00ff3d8848d0
+            - !Ref ECSSecurityGroup
       LoadBalancers:
         - TargetGroupArn: !Ref FrontendTargetGroup
           ContainerName: aws-app-frontend
